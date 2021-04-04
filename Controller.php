@@ -26,6 +26,60 @@ class Controller extends \MapasCulturais\Controllers\Registration
 {
     protected $config = [];
 
+    protected $cpfs_invalidos = [
+        '85217317019',
+        '89577373089',
+        '41708443002',
+        '29504531040',
+        '69212905064',
+        '07490413079',
+        '79582057084',
+        '93256810055',
+        '53328032061',
+        '66566631097',
+        '48124965005',
+        '46746185095',  
+        '27247005033',
+        '44399079037',
+        '50456286071',
+        '64279627010',
+        '94975266016',
+        '80574583050',
+        '83153590028',
+        '57774784098',
+        '30019874057',
+        '95044208000',
+        '57203313018',
+        '91033029033',
+        '24397467030',
+        '08464415001',
+        '23688850050',
+        '07619883002',
+        '24596743096',
+        '75257812061',
+        '81404080007',
+        '26327984002',
+        '11134503040',
+        '97219643012',
+        '45685171099',
+        '61947004085',
+        '81450616011',
+        '60649552016',
+        '30869131001',
+        '37819088010',
+        '97518511061',
+        '79159486015',
+        '33017577074',
+        '12842827082',
+        '57350852045',
+        '82075354073',
+        '69608590000',
+        '19305847099',
+        '91001998006',
+        '27414955052',
+        '78004669069'
+    ];
+
     public function __construct()
     {
         parent::__construct();
@@ -50,12 +104,13 @@ class Controller extends \MapasCulturais\Controllers\Registration
         foreach ($registrations as $registration) {
             $dataprev_validation = $app->repo('RegistrationEvaluation')->findBy(['registration' => $registration, 'user' => $user]);
             $recurso = $validador_recurso ? 
-                $app->repo('RegistrationEvaluation')->findBy(['registration' => $registration, 'user' => $validador_recurso, 'result' => '10']) :
+                $app->repo('RegistrationEvaluation')->findBy(['registration' => $registration, 'user' => $validador_recurso, 'result' => ['10', 'homogada por recurso']]) :
                 null;
+            
 
-            if($recurso || !$dataprev_validation){
+            if(!$dataprev_validation && ($recurso || $registration->status == '1')){
                 if ($this->config['exportador_requer_homologacao']) {
-                    if (in_array($registration->consolidatedResult, ['10', 'homologado']) ) {
+                    if (in_array($registration->consolidatedResult, ['10', 'homologado', 'homogada por recurso']) ) {
                         $_regs[] = $registration;
                     }
                 } else {
@@ -152,7 +207,7 @@ class Controller extends \MapasCulturais\Controllers\Registration
          * @var int $opportunity_id
          * @var array $key_registrations
          */
-        if ($getdata) { //caso existe data como parâmetro, ele pega os registros do range de data selecionada com satatus 1
+        if ($getdata) { //caso existe data como parâmetro, ele pega os registros do range de data selecionada com status maior que zero
             $dql = "
             SELECT
                 e
@@ -161,7 +216,7 @@ class Controller extends \MapasCulturais\Controllers\Registration
             WHERE
                 e.sentTimestamp >=:startDate AND
                 e.sentTimestamp <= :finishDate AND
-                e.status = :status AND
+                e.status > 0 AND
                 e.opportunity = :opportunity_Id";
 
             $query = $app->em->createQuery($dql);
@@ -169,25 +224,23 @@ class Controller extends \MapasCulturais\Controllers\Registration
             $conditions = $query->setParameters([
                 'opportunity_Id' => $opportunity_id,
                 'startDate' => $startDate,
-                'finishDate' => $finishDate,
-                'status' => $status,
+                'finishDate' => $finishDate
             ]);
             $registrations = $query->getResult();
-        } else { //Se não exister data como parâmetro, ele retorna todos os registros com status 1
+        } else { //Se não exister data como parâmetro, ele retorna todos os registros com maior que zero
             $dql = "
             SELECT
                 e
             FROM
                 MapasCulturais\Entities\Registration e
             WHERE
-                e.status = :status AND
+                e.status > 0 AND
                 e.opportunity = :opportunity_Id";
 
             $query = $app->em->createQuery($dql);
 
             $conditions = $query->setParameters([
                 'opportunity_Id' => $opportunity_id,
-                'status' => $status,
             ]);
             
             $registrations = $query->getResult();
@@ -244,7 +297,8 @@ class Controller extends \MapasCulturais\Controllers\Registration
         $fields = [
             "CPF" => function ($registrations) use ($csv_conf) {
                 $field_id = $csv_conf["CPF"];
-                return str_replace(['.', '-'], '', $registrations->$field_id);
+                $result = str_replace(['.', '-'], '', $registrations->$field_id);
+                return preg_replace('/[^0-9]/i', '', $result);
 
             },
             'SEXO' => function ($registrations) use ($csv_conf) {
@@ -450,6 +504,8 @@ class Controller extends \MapasCulturais\Controllers\Registration
          */
         $data_candidate = [];
         $data_familyGroup = [];
+        
+        $cpf_counter = 0;
         foreach ($registrations as $key_registration => $registration) {
             $cpf_candidate = '';
             foreach ($fields as $key_fields => $field) {
@@ -483,7 +539,13 @@ class Controller extends \MapasCulturais\Controllers\Registration
                                     $data_familyGroup[$key_registration][$key_familyGroup][$header] = $cpf_candidate;
 
                                 } elseif ($header == "FAMILIARCPF") {
-                                    $data_familyGroup[$key_registration][$key_familyGroup][$header] = str_replace(['.', '-'], '', $familyGroup->cpf);
+                                    $family_cpf = preg_replace('#[^\d]*#','', $familyGroup->cpf);
+                                    if (!\Respect\Validation\Validator::cpf()->validate($family_cpf)){
+                                        // utiliza um CPF com dígito verificador válido, mas não cadastrado na receita federal
+                                        $family_cpf = $this->cpfs_invalidos[$cpf_counter];
+                                        $cpf_counter++;
+                                    }
+                                    $data_familyGroup[$key_registration][$key_familyGroup][$header] = $family_cpf;
 
                                 } elseif ($header == "GRAUPARENTESCO") {
                                     $data_familyGroup[$key_registration][$key_familyGroup][$header] = $familyGroup->relationship;
@@ -822,7 +884,8 @@ class Controller extends \MapasCulturais\Controllers\Registration
             $fields_cpf_ = [
                 'CPF' => function ($registrations) use ($fields_cpf) {
                     $field_id = $fields_cpf['CPF'];
-                    return str_replace(['.', '-'], '', $registrations->$field_id);
+                    $result = str_replace(['.', '-'], '', $registrations->$field_id);
+                    return preg_replace('/[^0-9]/i', '', $result);
 
                 },
                 'SEXO' => function ($registrations) use ($fields_cpf) {
@@ -858,7 +921,7 @@ class Controller extends \MapasCulturais\Controllers\Registration
 
                     }
 
-                    return $result;
+                    return $this->normalizeString(trim($result));
                 },
                 'FLAG_CAD_ESTADUAL' => function ($registrations) use ($fields_cpf, $inscricoes) {
                     $field_id = $fields_cpf["FLAG_CAD_ESTADUAL"];
@@ -1268,10 +1331,11 @@ class Controller extends \MapasCulturais\Controllers\Registration
                         $field_id = $field_temp;
                     }
                     if ($field_id){
-                        return str_replace(['.', '-', '/'], '', $registrations->$field_id);
+                        $result =  str_replace(['.', '-', '/'], '', $registrations->$field_id);
                     } else {
-                        return null;
+                        $result = null;
                     }
+                    return preg_replace('/[^0-9]/i', '', $result);
 
                 }, 'FLAG_CAD_ESTADUAL' => function ($registrations) use ($fields_cnpj, $inscricoes) {
                     $field_id = $fields_cnpj["FLAG_CAD_ESTADUAL"];
@@ -2163,10 +2227,6 @@ class Controller extends \MapasCulturais\Controllers\Registration
         }
     }
 
-    function compareNames($n1, $n2) {
-
-    }
-
     /**
      * Importador para o inciso 1
      *
@@ -2295,6 +2355,10 @@ class Controller extends \MapasCulturais\Controllers\Registration
                     continue;
                 }
 
+                if ($key_candidate == 'SITUACAO_CADASTRO') {
+                    $evaluation[$results_key]['DADOS_DO_REQUERENTE']['SITUACAO_CADASTRO'] = $value;
+                }
+
                 if ($key_candidate == 'IDENTIF_CAD_ESTAD_CULT') {
                     $evaluation[$results_key]['DADOS_DO_REQUERENTE']['N_INSCRICAO'] = $value;
                 }
@@ -2381,6 +2445,7 @@ class Controller extends \MapasCulturais\Controllers\Registration
             if (!$result_validation) {
                 $result_aptUnfit[$key_evaluetion] = $value['DADOS_DO_REQUERENTE'];
                 $result_aptUnfit[$key_evaluetion]['ACCEPT'] = true;
+                $result_aptUnfit[$key_evaluetion]['REASONS'][] = '';
             } else {
                 $result_aptUnfit[$key_evaluetion] = $value['DADOS_DO_REQUERENTE'];                
                 $result_aptUnfit[$key_evaluetion]['ACCEPT'] = false;
@@ -2414,11 +2479,14 @@ class Controller extends \MapasCulturais\Controllers\Registration
             if (!$registration){
                 continue;
             }
-            $registration->__skipQueuingPCacheRecreation = true;
+            $registration->__skipQueuingPCacheRecreation = true;            
             
+            $data = $registration->dataprev_raw;
+            $statusAtual = array_search($data->SITUACAO_CADASTRO, $this->statusCodeDataprev());
+
             /* @TODO: implementar atualização de status?? */
-            if ($registration->dataprev_raw != (object) []) {
-                $app->log->info("Dataprev #{$count} {$registration} APROVADA - JÁ PROCESSADA");
+            if ($registration->dataprev_raw != (object) [] && !$this->reprocess($r)) {
+                $app->log->info("Dataprev #{$count} {$registration} APROVADA - JÁ PROCESSADA O STATUS ATUAL É {$statusAtual}");
                 continue;
             }
             
@@ -2435,14 +2503,17 @@ class Controller extends \MapasCulturais\Controllers\Registration
             $user = $app->plugins['AldirBlancDataprev']->getUser();
 
             /* @TODO: versão para avaliação documental */
-            $evaluation = new RegistrationEvaluation;
+            if(!($evaluation = $app->repo('RegistrationEvaluation')->findOneBy(['registration' => $registration, "user" => $user]))){
+                $evaluation = new RegistrationEvaluation;
+                $evaluation->user = $user;
+                $evaluation->registration = $registration;               
+                $evaluation->status = 1;
+            }
+            
             $evaluation->__skipQueuingPCacheRecreation = true;
-            $evaluation->user = $user;
-            $evaluation->registration = $registration;
             $evaluation->evaluationData = ['status' => "10", "obs" => 'selecionada'];
             $evaluation->result = "10";
-            $evaluation->status = 1;
-
+            
             $evaluation->save(true);
 
             $app->em->clear();
@@ -2451,18 +2522,19 @@ class Controller extends \MapasCulturais\Controllers\Registration
 
         foreach($reprovados as $r) {
             $count++;
-
             $registration = $app->repo('Registration')->findOneBy(['number' => $r['N_INSCRICAO']]);
             if (!$registration){
                 continue;
             }
             $registration->__skipQueuingPCacheRecreation = true;
-            
-            if ($registration->dataprev_raw != (object) []) {
-                $app->log->info("Dataprev #{$count} {$registration} REPROVADA - JÁ PROCESSADA");
+            $data = $registration->dataprev_raw;
+            $statusAtual = array_search($data->SITUACAO_CADASTRO, $this->statusCodeDataprev());
+
+            if ($registration->dataprev_raw != (object) [] && !$this->reprocess($r)) {
+                $app->log->info("Dataprev #{$count} {$registration} REPROVADA - JÁ PROCESSADA O STATUS ATUAL É {$statusAtual}");
                 continue;
             }
-
+            
             $app->log->info("Dataprev #{$count} {$registration} REPROVADA");
 
             $registration->dataprev_raw = (object) $raw_data_by_num[$registration->number];
@@ -2476,15 +2548,24 @@ class Controller extends \MapasCulturais\Controllers\Registration
             $user = $app->plugins['AldirBlancDataprev']->getUser();
 
             /* @TODO: versão para avaliação documental */
-            $evaluation = new RegistrationEvaluation;
+            if(!($evaluation = $app->repo('RegistrationEvaluation')->findOneBy(['registration' => $registration, "user" => $user]))){
+                $evaluation = new RegistrationEvaluation;
+                $evaluation->user = $user;
+                $evaluation->registration = $registration;               
+                $evaluation->status = 1;
+            }
+            
             $evaluation->__skipQueuingPCacheRecreation = true;
-            $evaluation->user = $user;
-            $evaluation->registration = $registration;
             $evaluation->evaluationData = ['status' => "2", "obs" => implode("\\n", $r['REASONS'])];
             $evaluation->result = "2";
-            $evaluation->status = 1;
 
-            $evaluation->save(true); 
+            $evaluation->save(true);   
+            
+            //Altera os status da registration caso seja um reprocessamento
+            if(in_array('Reprocessado,', $r['REASONS'])){
+                $registration->status = 2;
+                $registration->save(true);
+            }
 
             $app->em->clear();
 
@@ -2604,6 +2685,10 @@ class Controller extends \MapasCulturais\Controllers\Registration
             $candidate = $result;
             foreach ($candidate as $key_candidate => $value) {                
                 
+                if ($key_candidate == 'SITUACAO_CADASTRO') {
+                    $evaluation[$results_key]['DADOS_DO_REQUERENTE']['SITUACAO_CADASTRO'] = $value;
+                }
+                
                 if ($key_candidate == $conf_csv['RegisterNumber']) {
                     $evaluation[$results_key]['DADOS_DO_REQUERENTE']['N_INSCRICAO'] = $value;
                 }
@@ -2673,6 +2758,7 @@ class Controller extends \MapasCulturais\Controllers\Registration
             if (!$result_validation) {
                 $result_aptUnfit[$key_evaluetion] = $value['DADOS_DO_REQUERENTE'];
                 $result_aptUnfit[$key_evaluetion]['ACCEPT'] = true;
+                $result_aptUnfit[$key_evaluetion]['REASONS'][] = '';
             } else {
                 $result_aptUnfit[$key_evaluetion] = $value['DADOS_DO_REQUERENTE'];                
                 $result_aptUnfit[$key_evaluetion]['ACCEPT'] = false;
@@ -2709,11 +2795,14 @@ class Controller extends \MapasCulturais\Controllers\Registration
             }
             $registration->__skipQueuingPCacheRecreation = true;
             
-            /* @TODO: implementar atualização de status?? */
-            if ($registration->dataprev_raw != (object) []) {
-                $app->log->info("Dataprev #{$count} {$registration} APROVADA - JÁ PROCESSADA");
+            /* @TODO: implementar atualização de status?? */            
+            $data = $registration->dataprev_raw;
+            $statusAtual = array_search($data->SITUACAO_CADASTRO, $this->statusCodeDataprev());
+
+            if ($registration->dataprev_raw != (object) [] && !$this->reprocess($r)) {
+                $app->log->info("Dataprev #{$count} {$registration} REPROVADA - JÁ PROCESSADA O STATUS ATUAL É {$statusAtual}");
                 continue;
-            }
+            }      
             
             $app->log->info("Dataprev #{$count} {$registration} APROVADA");
             
@@ -2725,34 +2814,40 @@ class Controller extends \MapasCulturais\Controllers\Registration
             $user = $app->plugins['AldirBlancDataprev']->getUser();
 
             /* @TODO: versão para avaliação documental */
-            $evaluation = new RegistrationEvaluation;
+            if(!($evaluation = $app->repo('RegistrationEvaluation')->findOneBy(['registration' => $registration, "user" => $user]))){
+                $evaluation = new RegistrationEvaluation;
+                $evaluation->user = $user;
+                $evaluation->registration = $registration;               
+                $evaluation->status = 1;
+            }
+            
             $evaluation->__skipQueuingPCacheRecreation = true;
-            $evaluation->user = $user;
-            $evaluation->registration = $registration;
             $evaluation->evaluationData = ['status' => "10", "obs" => 'selecionada'];
             $evaluation->result = "10";
-            $evaluation->status = 1;
 
             $evaluation->save(true);
-
             $app->em->clear();
 
         }
 
         foreach($reprovados as $r) {
-            $count++;
-
+            $count++;           
+           
             $registration = $app->repo('Registration')->findOneBy(['number' => $r['N_INSCRICAO']]);
             if (!$registration){
                 continue;
             }
             $registration->__skipQueuingPCacheRecreation = true;
             
-            if ($registration->dataprev_raw != (object) []) {
-                $app->log->info("Dataprev #{$count} {$registration} REPROVADA - JÁ PROCESSADA");
+           
+            $data = $registration->dataprev_raw;
+            $statusAtual = array_search($data->SITUACAO_CADASTRO, $this->statusCodeDataprev());
+
+            if ($registration->dataprev_raw != (object) [] && !$this->reprocess($r)) {
+                $app->log->info("Dataprev #{$count} {$registration} REPROVADA - JÁ PROCESSADA O STATUS ATUAL É {$statusAtual}");
                 continue;
             }
-
+                       
             $app->log->info("Dataprev #{$count} {$registration} REPROVADA");
 
             $registration->dataprev_raw = $raw_data_by_num[$registration->number];
@@ -2762,16 +2857,26 @@ class Controller extends \MapasCulturais\Controllers\Registration
 
             $user = $app->plugins['AldirBlancDataprev']->getUser();
 
-            /* @TODO: versão para avaliação documental */
-            $evaluation = new RegistrationEvaluation;
+             /* @TODO: versão para avaliação documental */
+             if(!($evaluation = $app->repo('RegistrationEvaluation')->findOneBy(['registration' => $registration, "user" => $user]))){
+                $evaluation = new RegistrationEvaluation;
+                $evaluation->user = $user;
+                $evaluation->registration = $registration;               
+                $evaluation->status = 1;
+            }
+            
+                       
             $evaluation->__skipQueuingPCacheRecreation = true;
-            $evaluation->user = $user;
-            $evaluation->registration = $registration;
             $evaluation->evaluationData = ['status' => "2", "obs" => implode("\\n", $r['REASONS'])];
             $evaluation->result = "2";
-            $evaluation->status = 1;
 
-            $evaluation->save(true); 
+            $evaluation->save(true);   
+            
+            //Altera os status da registration caso seja um reprocessamento
+            if(in_array('Reprocessado,', $r['REASONS'])){
+                $registration->status = 2;
+                $registration->save(true);
+            }
 
             $app->em->clear();
 
@@ -2792,6 +2897,58 @@ class Controller extends \MapasCulturais\Controllers\Registration
     }
 
     /**
+     * Relação de status DEataprev
+     */
+    private function statusCodeDataprev(){
+        return [
+            'NAO PROCESSADO' => 1,
+            'PROCESSADO' => 2,
+            'AGUARDANDO PROCESSAMENTO' => 3,
+            'REPROCESSADO' => 4,
+            'CANCELADO' => 5,
+            'PAGAMENTO CONFIRMADO' => 6,
+            'PRESTACAO DE CONTAS CONFIRMADA' => 7,
+            'RETIDO PARA AVALIACAO' => 8
+        ];
+    }
+
+    /**
+     * Faz as analises reprocessamento ao importar o retorno do Dataprev
+     */
+    private function reprocess($r){        
+        $app = App::i();
+        $user = $app->plugins['AldirBlancDataprev']->getUser();
+        $registration = $app->repo('Registration')->findOneBy(['number' => $r['N_INSCRICAO']]);        
+
+        $metaDado = $registration->getMetadata();
+        $data = json_decode($metaDado['dataprev_raw']);
+
+        /**
+         * Reprocessamento erro dataprev
+         */
+        if(in_array('Reprocessado,', $r['REASONS'])){
+            return true;
+        }
+
+        /**
+         * Reprocessamento inscrições que estvam como retidas para avaliações
+         */
+        if($data->SITUACAO_CADASTRO == 8){
+            return true;
+        }
+        
+        /**
+         * Analisa se deve existir reprocessamento da inscrição caso em um segundo momento a mesma venha com status (2-“Processado”, 5-“Cancelado”, 4-“Reprocessado”)
+         */
+        if((in_array($r['SITUACAO_CADASTRO'], [2, 5,4])) && ($r['SITUACAO_CADASTRO'] != $data->SITUACAO_CADASTRO)){
+            $app->log->info($r['N_INSCRICAO'] . " SERÁ REPROCESSADA");            
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
      * Faz a normalização da string e remove caracteres especiais
      *
      * @param string $value
@@ -2800,7 +2957,7 @@ class Controller extends \MapasCulturais\Controllers\Registration
     private function normalizeString($value): string
     {
         $value = Normalizer::normalize($value, Normalizer::FORM_D);
-       return preg_replace('/[^a-z0-9 ]/i', '', $value);
+       return preg_replace('/[^A-Za-z0-9 ]/i', '', $value);
     }
 
     /**
